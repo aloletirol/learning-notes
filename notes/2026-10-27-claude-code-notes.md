@@ -23,3 +23,5 @@ Include a test suite. Give Claude a test suite it can continuously validate agai
 <b> Commit </b>
 <p>
 Before you commit, run a subagent /code-reviewer to look at your work. A subagent gets a fresh pair of eyes on the codebase — it doesn't carry the bias the main agent might have from the session.
+
+<h2>The Explore → Plan → Code → Commit Workflow</h1>
