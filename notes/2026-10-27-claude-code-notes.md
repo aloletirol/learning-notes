@@ -6,6 +6,8 @@ date: 2026-10-27
 
 The Explore → Plan → Code → Commit Workflow
 
+
+
 Define a success criteria. For Claude to be confident in its results, it needs to be clear on what "correct" looks like. Make this explicit when writing your plan.
 
 
