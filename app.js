@@ -35,12 +35,13 @@ function toBase64(text) {
 }
 
 // Creates or updates notes/<filename> on GitHub — this makes a commit.
-async function saveFileToGitHub(filename, content, message) {
+// `sha` is the file's current version id (needed to update it). Returns the new one.
+async function saveFileToGitHub(filename, content, message, sha) {
   const url = `${API}/contents/notes/${encodeURIComponent(filename)}`;
-  // Updating an existing file needs its current "sha" (its version id).
-  let sha;
-  const existing = await fetch(`${url}?ref=${branch}&t=${Date.now()}`, { headers: ghHeaders(), cache: "no-store" });
-  if (existing.ok) sha = (await existing.json()).sha;
+  if (!sha) {
+    const existing = await fetch(`${url}?ref=${branch}&t=${Date.now()}`, { headers: ghHeaders(), cache: "no-store" });
+    if (existing.ok) sha = (await existing.json()).sha;
+  }
 
   const res = await fetch(url, {
     method: "PUT",
@@ -51,7 +52,28 @@ async function saveFileToGitHub(filename, content, message) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.message || `GitHub said ${res.status}`);
   }
+  return (await res.json()).content.sha;
 }
+
+// Checks a token with GitHub and stores it. Returns an error message, or "" if it worked.
+async function connectWithToken(token) {
+  if (!token) return "Paste your token in the box first.";
+  const res = await fetch(API, { headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` } });
+  const repo = res.ok ? await res.json() : null;
+  if (!repo) return "❌ GitHub didn't accept that token. Make a new one and copy it with the 📋 icon.";
+  if (!repo.permissions || !repo.permissions.push) {
+    return "❌ That token can read but not save. Make a new one with the public_repo box ticked.";
+  }
+  localStorage.setItem("githubToken", token);
+  return "";
+}
+
+const TOKEN_STEPS = `
+  <ol>
+    <li>Open <a href="https://github.com/settings/tokens/new?description=learning-notes%20app&scopes=public_repo" target="_blank">this GitHub page</a> (it's already filled in for you).</li>
+    <li>Choose <b>Expiration: 90 days</b>, scroll down and click <b>Generate token</b>.</li>
+    <li>Click the 📋 copy icon next to the <code>ghp_…</code> token, paste it below and click <b>Connect</b>.</li>
+  </ol>`;
 
 // ---------- Loading notes ----------
 
@@ -218,18 +240,14 @@ function renderNote(note) {
 
   const actions = main.querySelector(".actions");
   if (hasGitHub) {
-    const base = `https://github.com/${config.owner}/${config.repo}`;
-    const fileUrl = `${branch}/notes/${encodeURIComponent(note.file)}`;
-    if (isConnected()) {
-      const edit = document.createElement("a");
-      edit.className = "btn";
-      edit.href = "#edit=" + encodeURIComponent(note.file);
-      edit.textContent = "Edit";
-      actions.append(edit);
-    } else {
-      actions.append(linkButton("Edit on GitHub", `${base}/edit/${fileUrl}`));
-    }
-    actions.append(linkButton("History", `${base}/commits/${fileUrl}`));
+    const edit = document.createElement("a");
+    edit.className = "btn";
+    edit.href = "#edit=" + encodeURIComponent(note.file);
+    edit.textContent = "Edit";
+    actions.append(
+      edit,
+      linkButton("History", `https://github.com/${config.owner}/${config.repo}/commits/${branch}/notes/${encodeURIComponent(note.file)}`)
+    );
   }
   main.scrollTop = 0;
 }
@@ -243,7 +261,7 @@ function linkButton(label, href) {
   return a;
 }
 
-// ---------- Editor (new note, or editing an existing one) ----------
+// ---------- Editor (new note, or editing an existing one) — saves automatically ----------
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -251,11 +269,13 @@ const slugify = (s) =>
   s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
     .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "note";
 
+const AUTOSAVE_DELAY = 2000; // ms after you stop typing
+
 function renderEditor(existing) {
-  const connected = isConnected();
   const main = $("main");
   main.innerHTML = `
     <div class="page">
+      <div id="connectBox"></div>
       <input class="title-input" id="titleInput" placeholder="Untitled" />
       <input class="tags-input" id="tagsInput" placeholder="Tags, separated by commas (e.g. claude-code, git)" />
       <div class="editor-grid">
@@ -263,20 +283,11 @@ function renderEditor(existing) {
         <div class="preview content" id="preview"></div>
       </div>
       <div class="meta" style="border:none; margin-top:16px">
-        <div class="actions" style="margin-left:0">
-          ${connected ? '<button class="btn primary" id="save">Save</button>' : ""}
-          ${hasGitHub && !connected ? '<button class="btn primary" id="saveGitHub">Save to GitHub</button>' : ""}
-          <button class="btn" id="download">Download .md</button>
-          <a class="btn" href="${existing ? "#note=" + encodeURIComponent(existing.file) : "#"}">Cancel</a>
+        <span class="hint" id="status" style="margin:0"></span>
+        <div class="actions">
+          <button class="btn primary" id="done">Done</button>
         </div>
       </div>
-      <p class="hint" id="status">${
-        connected
-          ? "Tip: press <b>Cmd + S</b> to save."
-          : hasGitHub
-            ? "Want one-click saving? <a href='#connect'>Connect GitHub</a> once."
-            : "Not connected to GitHub yet (see GITHUB-GUIDE.md). For now, download the file and put it in the <code>notes/</code> folder."
-      }</p>
     </div>`;
 
   const titleInput = $("titleInput");
@@ -285,140 +296,121 @@ function renderEditor(existing) {
   const preview = $("preview");
   const status = $("status");
 
+  // Which file this note is saved as, and its GitHub version id.
+  let file = existing ? existing.file : null;
+  let sha;
+  let date = existing ? existing.date || today() : today();
+  let dirty = false;
+  let saving = null; // the save in progress, if any
+  let timer;
+
   if (existing) {
     titleInput.value = existing.title;
     tagsInput.value = existing.tags.join(", ");
     bodyInput.value = existing.body.trim();
   } else {
-    // Keep a draft in the browser so nothing is lost if you close the tab.
+    // Unsaved text is also kept in the browser, so nothing is lost if you close the tab.
     const draft = JSON.parse(localStorage.getItem("draft") || "{}");
     titleInput.value = draft.title || "";
     tagsInput.value = draft.tags || "";
     bodyInput.value = draft.body || "";
+    dirty = Boolean(draft.title || draft.body);
   }
 
-  const update = () => {
+  const isEmpty = () => !titleInput.value.trim() && !bodyInput.value.trim();
+
+  const buildContent = () =>
+    `---\ntitle: ${titleInput.value.trim() || "Untitled"}\ntags: ${tagsInput.value.trim()}\ndate: ${date}\n---\n\n${bodyInput.value.trim()}\n`;
+
+  const setStatus = (text) => (status.textContent = text);
+
+  async function save() {
+    if (saving) await saving; // one save at a time
+    if (!dirty || isEmpty() || !isConnected()) return;
+    dirty = false;
+    const title = titleInput.value.trim() || "Untitled";
+    const content = buildContent();
+    const isNew = !file;
+    if (!file) file = `${date}-${slugify(title)}.md`;
+    setStatus("Saving…");
+    saving = (async () => {
+      try {
+        sha = await saveFileToGitHub(file, content, `${isNew ? "Add" : "Update"} note: ${title}`, sha);
+        // Show it in the sidebar right away.
+        state.notes = state.notes.filter((n) => n.file !== file);
+        state.notes.push(parseNote(file, content));
+        sortNotes();
+        renderSidebar();
+        if (!existing) localStorage.removeItem("draft");
+        setStatus("Saved ✓");
+      } catch (err) {
+        dirty = true;
+        setStatus(`Not saved yet (${err.message}). Retrying when you type again.`);
+      }
+    })();
+    await saving;
+    saving = null;
+  }
+
+  const onChange = () => {
+    dirty = true;
     preview.innerHTML = renderMarkdown(bodyInput.value || "*Preview appears here*");
     if (!existing) {
       localStorage.setItem("draft", JSON.stringify({
         title: titleInput.value, tags: tagsInput.value, body: bodyInput.value,
       }));
     }
+    if (isConnected()) {
+      setStatus("Editing…");
+      clearTimeout(timer);
+      timer = setTimeout(save, AUTOSAVE_DELAY);
+    }
   };
-  [titleInput, tagsInput, bodyInput].forEach((el) => el.addEventListener("input", update));
-  update();
+  [titleInput, tagsInput, bodyInput].forEach((el) => el.addEventListener("input", onChange));
+  preview.innerHTML = renderMarkdown(bodyInput.value || "*Preview appears here*");
   (existing ? bodyInput : titleInput).focus();
 
-  const buildFile = () => {
-    const title = titleInput.value.trim() || "Untitled";
-    const date = existing ? existing.date || today() : today();
-    const content =
-      `---\ntitle: ${title}\ntags: ${tagsInput.value.trim()}\ndate: ${date}\n---\n\n${bodyInput.value.trim()}\n`;
-    const filename = existing ? existing.file : `${date}-${slugify(title)}.md`;
-    return { filename, content, title };
+  // "Done": save anything pending, then show the note.
+  $("done").onclick = async () => {
+    clearTimeout(timer);
+    await save();
+    location.hash = file ? "note=" + encodeURIComponent(file) : "";
   };
 
-  $("download").onclick = () => {
-    const { filename, content } = buildFile();
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([content], { type: "text/markdown" }));
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  };
+  // Save before leaving the page too.
+  window.onbeforeunload = () => (dirty && isConnected() && !isEmpty() ? true : undefined);
 
-  if (connected) {
-    let saving = false;
-    const save = async () => {
-      if (saving) return;
-      saving = true;
-      const btn = $("save");
-      btn.disabled = true;
-      btn.textContent = "Saving…";
-      const { filename, content, title } = buildFile();
-      try {
-        await saveFileToGitHub(filename, content, `${existing ? "Update" : "Add"} note: ${title}`);
-        // Show it right away instead of waiting for GitHub to refresh its lists.
-        state.notes = state.notes.filter((n) => n.file !== filename);
-        state.notes.push(parseNote(filename, content));
-        sortNotes();
-        if (!existing) localStorage.removeItem("draft");
-        location.hash = "note=" + encodeURIComponent(filename);
-      } catch (err) {
-        status.textContent = `❌ Couldn't save: ${err.message}. Your text is still here — try again, or check your connection in settings.`;
-        btn.disabled = false;
-        btn.textContent = "Save";
-        saving = false;
-      }
-    };
-    $("save").onclick = save;
-    main.onkeydown = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-        e.preventDefault();
-        save();
-      }
-    };
-  }
-
-  if (hasGitHub && !connected) {
-    $("saveGitHub").onclick = () => {
-      const { filename, content } = buildFile();
-      const url =
-        `https://github.com/${config.owner}/${config.repo}/new/${branch}` +
-        `?filename=${encodeURIComponent("notes/" + filename)}&value=${encodeURIComponent(content)}`;
-      window.open(url, "_blank");
-      renderSaveSteps(url, filename);
-    };
-  }
-}
-
-// After "Save to GitHub" (not connected): remind the user to commit, and keep the draft until they have.
-function renderSaveSteps(url, filename) {
-  const main = $("main");
-  main.innerHTML = `
-    <div class="page">
-      <h1 class="title">Almost saved! 📝</h1>
-      <div class="content">
-        <p>Your note opened in a <b>new GitHub tab</b>. It is <b>not saved yet</b>.</p>
-        <ol>
-          <li>Go to the GitHub tab.</li>
-          <li>Scroll down and click the green <b>Commit changes</b> button (click it again if a box pops up).</li>
-          <li>Come back here and click <b>I committed it</b>.</li>
-        </ol>
-        <p>Don't see a GitHub tab? Click <b>Open GitHub again</b>.</p>
-        <p>Tired of these steps? <a href="#connect">Connect GitHub once</a> and Save becomes one click.</p>
-      </div>
-      <div class="meta" style="border:none">
-        <div class="actions" style="margin-left:0">
-          <button class="btn primary" id="committed">I committed it</button>
-          <a class="btn" id="reopen" target="_blank">Open GitHub again</a>
-          <a class="btn" href="#new">Back to editing</a>
-        </div>
-      </div>
-      <p class="hint" id="waitMsg"></p>
-    </div>`;
-  $("reopen").href = url;
-
-  $("committed").onclick = async () => {
-    const msg = $("waitMsg");
-    // GitHub can take up to a minute to show new files, so check a few times.
-    for (let attempt = 1; attempt <= 12; attempt++) {
-      msg.textContent = `Looking for your note on GitHub… (try ${attempt} of 12)`;
-      await loadNotes();
-      if (state.notes.some((n) => n.file === filename)) {
-        localStorage.removeItem("draft");
-        location.hash = "note=" + encodeURIComponent(filename);
-        route();
+  // Not connected yet: show the one-time connect box at the top of the editor.
+  if (isConnected()) {
+    setStatus(existing ? "Changes save automatically." : "Start typing — it saves automatically.");
+  } else if (hasGitHub) {
+    const box = $("connectBox");
+    box.innerHTML = `
+      <div class="content connect-box">
+        <p><b>One-time step:</b> connect GitHub so your notes save automatically.</p>
+        ${TOKEN_STEPS}
+        <input id="tokenInput" class="search" type="password" placeholder="Paste your token here (ghp_…)" autocomplete="off" />
+        <button class="btn primary" id="connectBtn">Connect</button>
+        <span class="hint" id="connectMsg"></span>
+      </div>`;
+    setStatus("Your text is kept in this browser until you connect.");
+    $("connectBtn").onclick = async () => {
+      $("connectMsg").textContent = "Checking with GitHub…";
+      const error = await connectWithToken($("tokenInput").value.trim());
+      if (error) {
+        $("connectMsg").textContent = error;
         return;
       }
-      await new Promise((r) => setTimeout(r, 10000));
-    }
-    msg.textContent =
-      "Still can't find it. Check that you clicked Commit changes on GitHub. Your draft is kept, so nothing is lost.";
-  };
+      box.innerHTML = "";
+      $("source").innerHTML = $("source").innerHTML.replace(/<a href="#connect">🔗[^<]*<\/a>/, '✅ Connected · <a href="#connect">settings</a>');
+      setStatus("Connected ✓");
+      dirty = !isEmpty();
+      save();
+    };
+  }
 }
 
-// ---------- Connect GitHub (one-time setup) ----------
+// ---------- Connect GitHub (settings page) ----------
 
 function renderConnect() {
   const main = $("main");
@@ -428,18 +420,12 @@ function renderConnect() {
       <h1 class="title">🔗 Connect GitHub</h1>
       <div class="content">
         ${connected
-          ? "<p>✅ <b>This browser is connected.</b> Save and Edit write straight to your GitHub repository.</p>"
-          : `<p>Do this <b>once per browser</b>. After that, <b>Save</b> puts your note on GitHub in one click.</p>
-        <ol>
-          <li>Open <a href="https://github.com/settings/tokens/new?description=learning-notes%20app&scopes=public_repo" target="_blank">this GitHub page</a> (it's already filled in for you).</li>
-          <li>Choose <b>Expiration: 90 days</b>, scroll down and click <b>Generate token</b>.</li>
-          <li>Click the 📋 copy icon next to the <code>ghp_…</code> token.</li>
-          <li>Paste it in the box below and click <b>Connect</b>.</li>
-        </ol>
-        <p class="hint">The token is stored only in this browser and only sent to GitHub. Don't share it with anyone (or paste it in a chat).</p>`}
+          ? "<p>✅ <b>This browser is connected.</b> Notes save to your GitHub repository automatically.</p>"
+          : `<p>Do this <b>once per browser</b>. After that, notes save to GitHub automatically while you type.</p>
+             ${TOKEN_STEPS}`}
+        <p class="hint">The token is stored only in this browser and only sent to GitHub. Don't share it with anyone (or paste it in a chat).</p>
       </div>
-      ${connected ? "" : `
-      <input id="tokenInput" class="search" type="password" placeholder="Paste your token here (ghp_…)" style="width:100%; margin:8px 0" autocomplete="off" />`}
+      ${connected ? "" : `<input id="tokenInput" class="search" type="password" placeholder="Paste your token here (ghp_…)" style="width:100%; margin:8px 0" autocomplete="off" />`}
       <div class="meta" style="border:none">
         <div class="actions" style="margin-left:0">
           ${connected
@@ -462,25 +448,12 @@ function renderConnect() {
   }
 
   $("connect").onclick = async () => {
-    const token = $("tokenInput").value.trim();
-    const msg = $("connectMsg");
-    if (!token) {
-      msg.textContent = "Paste your token in the box first.";
+    $("connectMsg").textContent = "Checking with GitHub…";
+    const error = await connectWithToken($("tokenInput").value.trim());
+    if (error) {
+      $("connectMsg").textContent = error;
       return;
     }
-    msg.textContent = "Checking with GitHub…";
-    const res = await fetch(API, { headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` } });
-    const repo = res.ok ? await res.json() : null;
-    if (!repo) {
-      msg.textContent = "❌ GitHub didn't accept that token. Make a new one and copy it with the 📋 icon.";
-      return;
-    }
-    if (!repo.permissions || !repo.permissions.push) {
-      msg.textContent = "❌ That token can read but not save. Make a new one with the public_repo box ticked.";
-      return;
-    }
-    localStorage.setItem("githubToken", token);
-    msg.textContent = "✅ Connected!";
     await loadNotes();
     location.hash = "";
     route();
@@ -501,9 +474,10 @@ function currentRoute() {
 function route() {
   const r = currentRoute();
   const note = state.notes.find((n) => n.file === r.file);
+  window.onbeforeunload = null;
   if (r.view === "new") renderEditor();
   else if (r.view === "connect") renderConnect();
-  else if (r.view === "edit" && note && isConnected()) renderEditor(note);
+  else if (r.view === "edit" && note) renderEditor(note);
   else renderNote(note || state.notes[0]);
   renderSidebar();
 }

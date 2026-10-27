@@ -209,6 +209,15 @@ body {
 
 .hint { color: var(--muted); font-size: 13px; margin-top: 14px; line-height: 1.5; }
 
+.connect-box {
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 4px 18px 16px;
+  margin-bottom: 28px;
+  font-size: 14px;
+}
+.connect-box .search { width: 100%; margin: 4px 0 10px; }
+
 @media (max-width: 800px) {
   body { flex-direction: column; height: auto; }
   .sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
