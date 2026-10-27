@@ -44,3 +44,6 @@ for what I do want Claude to remember, add to the Claude.md file
 <p>
 https://anthropic.skilljar.com/claude-code-101/469794
 (need to go deeper into this)
+
+<h2>Claude MD
+</h2>
