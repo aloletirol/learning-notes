@@ -4,7 +4,7 @@ tags:
 date: 2026-10-27
 ---
 
-The Explore → Plan → Code → Commit Workflow
+<h2>The Explore → Plan → Code → Commit Workflow
 
 Explore gives Claude the relevant context it needs for your project.
 Plan creates a plan of action that Claude uses to measure success.
