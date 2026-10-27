@@ -38,5 +38,7 @@ use subagents for a task that on I need the answer for
 
 for what I do want Claude to remember, add to the Claude.md file
 
-<h2><h2>Context Management
-</h1>
+<h2>Context Management
+</h2>
+
+<p>
