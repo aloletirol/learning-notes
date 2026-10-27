@@ -38,7 +38,9 @@ use subagents for a task that on I need the answer for
 
 for what I do want Claude to remember, add to the Claude.md file
 
-<h2>Context Management
+<h2>Code Review
 </h2>
 
 <p>
+https://anthropic.skilljar.com/claude-code-101/469794
+(need to go deeper into this)
