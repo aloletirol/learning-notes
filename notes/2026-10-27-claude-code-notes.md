@@ -66,3 +66,6 @@ This is a Next.js 15 app using the App Router, Tailwind, and Drizzle ORM.
 - Prefer named exports
 - All API routes go in app/api/
 - Use server actions instead of API routes where possible
+
+
+-----
