@@ -38,8 +38,8 @@ function parseNote(file, text) {
 
 // Online: ask GitHub which files are in notes/, then download each one.
 async function listFromGitHub() {
-  const url = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/notes?ref=${branch}`;
-  const res = await fetch(url);
+  const url = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/notes?ref=${branch}&t=${Date.now()}`;
+  const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`GitHub said ${res.status}`);
   const files = await res.json();
   return files
@@ -262,9 +262,54 @@ function renderEditor() {
         `https://github.com/${config.owner}/${config.repo}/new/${branch}` +
         `?filename=${encodeURIComponent("notes/" + filename)}&value=${encodeURIComponent(content)}`;
       window.open(url, "_blank");
-      localStorage.removeItem("draft");
+      renderSaveSteps(url, filename);
     };
   }
+}
+
+// After "Save to GitHub": remind the user to commit, and keep the draft until they have.
+function renderSaveSteps(url, filename) {
+  const main = $("main");
+  main.innerHTML = `
+    <div class="page">
+      <h1 class="title">Almost saved! 📝</h1>
+      <div class="content">
+        <p>Your note opened in a <b>new GitHub tab</b>. It is <b>not saved yet</b>.</p>
+        <ol>
+          <li>Go to the GitHub tab.</li>
+          <li>Scroll down and click the green <b>Commit changes</b> button (click it again if a box pops up).</li>
+          <li>Come back here and click <b>I committed it</b>.</li>
+        </ol>
+        <p>Don't see a GitHub tab? Click <b>Open GitHub again</b>.</p>
+      </div>
+      <div class="meta" style="border:none">
+        <div class="actions" style="margin-left:0">
+          <button class="btn primary" id="committed">I committed it</button>
+          <a class="btn" id="reopen" target="_blank">Open GitHub again</a>
+          <a class="btn" href="#new">Back to editing</a>
+        </div>
+      </div>
+      <p class="hint" id="waitMsg"></p>
+    </div>`;
+  $("reopen").href = url;
+
+  $("committed").onclick = async () => {
+    const msg = $("waitMsg");
+    // GitHub can take up to a minute to show new files, so check a few times.
+    for (let attempt = 1; attempt <= 12; attempt++) {
+      msg.textContent = `Looking for your note on GitHub… (try ${attempt} of 12)`;
+      await loadNotes();
+      if (state.notes.some((n) => n.file === filename)) {
+        localStorage.removeItem("draft");
+        location.hash = "note=" + encodeURIComponent(filename);
+        route();
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 10000));
+    }
+    msg.textContent =
+      "Still can't find it. Check that you clicked Commit changes on GitHub. Your draft is kept, so nothing is lost.";
+  };
 }
 
 // ---------- Routing (#note=file.md or #new) ----------
