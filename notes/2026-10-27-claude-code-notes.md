@@ -31,3 +31,5 @@ Before you commit, run a subagent /code-reviewer to look at your work. A subagen
 /compact
 /clear- start from scratch
 /context - to see the context
+
+for what I do want Claude to remember, add to the Claude.md file
