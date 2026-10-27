@@ -24,8 +24,8 @@ Include a test suite. Give Claude a test suite it can continuously validate agai
 <p>
 Before you commit, run a subagent /code-reviewer to look at your work. A subagent gets a fresh pair of eyes on the codebase — it doesn't carry the bias the main agent might have from the session.
 
-<h1>Context Management
-</h1>
+<h2>Context Management
+</h2>
 
 <p>
 /compact
@@ -37,3 +37,6 @@ recommendation: /clear- start from scratch
 use subagents for a task that on I need the answer for
 
 for what I do want Claude to remember, add to the Claude.md file
+
+<h2><h2>Context Management
+</h1>
