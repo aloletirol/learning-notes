@@ -34,4 +34,5 @@ Before you commit, run a subagent /code-reviewer to look at your work. A subagen
 
 recommendation: /clear- start from scratch
 
+use subagents for a task that on I need the answer for
 for what I do want Claude to remember, add to the Claude.md file
