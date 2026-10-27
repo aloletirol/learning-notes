@@ -54,7 +54,7 @@ It's a Markdown file you add to the root of your project, and Claude Code reads 
 -----
 
 <p>
------
+
 
 # Project
 
