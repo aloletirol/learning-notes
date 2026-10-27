@@ -55,7 +55,7 @@ It's a Markdown file you add to the root of your project, and Claude Code reads 
 
 <p>
 
-
+----
 # Project
 
 This is a Next.js 15 app using the App Router, Tailwind, and Drizzle ORM.
