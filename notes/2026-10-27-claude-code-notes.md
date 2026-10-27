@@ -29,3 +29,5 @@ Before you commit, run a subagent /code-reviewer to look at your work. A subagen
 
 <p>
 /compact
+/clear- start from scratch
+/context - to see the context
