@@ -49,7 +49,7 @@ https://anthropic.skilljar.com/claude-code-101/469794
 </h2>
 <p>
 It's a Markdown file you add to the root of your project, and Claude Code reads it automatically every time you start a session. Think of it as an onboarding script for your codebase. The contents of the CLAUDE.md file are appended to your prompt.
-/init - creates one based on your codebase<p>
+/init - creates one based on your codebase-----<p>
 -----
 
 # Project
